@@ -426,3 +426,263 @@ pipeline{
 ![Complete build](./media/buildok.png)
 
 
+## Step 2: CI/CD Pipeline for a TODO Application
+
+### Step 2.1: Configure Artifactory
+
+1. Create an Ansible role to install Artifactory(You may install manually first on artifactory server: https://www.howtoforge.com/tutorial/ubuntu-jfrog/).
+
+2. Run the role against the Artifactory server.
+
+### Step 2.2: Prepare Jenkins
+
+1. Fork the php-todo repository (https://github.com/darey-devops/php-todo.git) into Jenkins Server.
+
+2. On you Jenkins server, install PHP, its dependencies(Feel free to do this manually at first, then update your Ansible accordingly later).
+
+```
+ sudo apt install -y zip libapache2-mod-php phploc php-{xml,bcmath,bz2,intl,gd,mbstring,mysql,zip}
+
+ sudo apt install composer
+
+ sudo php /tmp/composer-setup.php sudo mv composer.phar /usr/bin/composer
+
+ sudo mv composer.phar /usr/bin/composer
+```
+
+3. Configure the php.ini file, you can get the path to the file by running:
+
+```
+php --ini | grep xdebug
+```
+
+4. Once you get the path to the file, open with a text editor and paste in:
+
+```
+xdebug.mode = coverage
+```
+
+5. Install nodejs and npm:
+
+```
+sudo apt-get update -y
+sudo apt-get install nodejs -y
+sudo apt install npm -y
+```
+
+6. Install typescript using node package manager(npm):
+
+```
+npm install -g typescript
+```
+
+7. Restart php7.4-fpm
+
+```
+sudo systemmctl restart php7.4-fpm
+```
+
+### Install the following plugins on Jenkins UI
+
+- Plot plugin: to display tests reports and code coverage information.
+
+- Artifactory plugin: to easily deploy artifacts to Artifactory server.
+
+1. Go to the artifactory URL(http://artifactory-server-ip:8082) and create a local generic repository named php-todo(Default username and password is admin. After logging in, change the password).
+
+2. Configure Artifactory in Jenkins UI.
+
+3. Click Manage Jenkins, click Configure System.
+
+4. Scroll down to JFrog, click Add Artifactory Server.
+
+5. Enter the Server ID.
+
+6. Enter the URL as:
+
+```
+http://<artifactory-server-ip>:8082/artifactory
+```
+
+7. Enter the Default Deployer Credentials(the username and the changed password of artifactory).
+
+
+![Jfrog config](./media/jfrogconfig.png)
+
+
+### Step 2.3: Integrate Artifactory repository with Jenkins
+
+1. On Jenkins server, install `mysql-client`.
+2. Create a dummy `Jenkinsfile` in `php-todo` repo.
+3. In Blue Ocean, create multibranch php-todo pipeline(follow the previous steps earlier).
+4. Spin up an instance for a database, install and configure mysql-server( This is where data pertaining to the artifactory repository will be stored).
+
+5. Create a database and user on the database server.
+
+```
+CREATE DATABASE homestead;
+CREATE USER 'homestead'@'%' IDENTIFIED BY 'sePret^i';
+GRANT ALL PRIVILEGES ON * . * TO 'homestead'@'%';
+FLUSH PRIVILEGES;
+```
+Update the DB parameters in roles -> mysql -> defaults -> main.yml. Ensure the Ip address used in the database is the ip for Jenkins server.
+
+![DB config](./media/dbconfig.png)
+
+
+6. Check if the database created on the database server can be reached from the Jenkins server. On the jenkins server, run command:
+
+```
+mysql -u <DB_user> -h <DB-private-ip-address> -p
+```
+
+7. Update the `.env.sample` file with your db connectivity details.
+
+![DB config](./media/env.png)
+
+8. Update Jenkinsfile with proper configuration:
+
+```
+pipeline {
+  agent any
+
+  stages {
+
+   stage("Initial cleanup") {
+        steps {
+          dir("${WORKSPACE}") {
+            deleteDir()
+          }
+        }
+      }
+
+  stage('Checkout SCM') {
+    steps {
+          git branch: 'main', url: 'https://github.com/darey-devops/php-todo.git'
+    }
+  }
+
+  stage('Prepare Dependencies') {
+    steps {
+           sh 'mv .env.sample .env'
+           sh 'composer install'
+           sh 'php artisan migrate'
+           sh 'php artisan db:seed'
+           sh 'php artisan key:generate'
+        }
+      }
+    }
+  }
+```
+
+
+![Prepare dependencies](./media/dependencies.png)
+
+
+
+9. Update Jenkinsfile to include unit tests.
+
+```
+stage('Execute Unit Tests') {
+    steps {
+           sh './vendor/bin/phpunit'
+    }
+}
+```
+
+![Unit test](./media/unittest.png)
+
+
+### Step 2.4: Code Quality Analysis
+
+Most commonly used tool for php code quality analysis is phploc.
+
+- Install phploc on the Ansible-Jenkins server:
+
+```
+sudo apt-get install -y phploc
+```
+
+- Update the jenkins file with the below. The output of the data will be saved in build/logs/phploc.csv file:
+
+```
+stage('Code Analysis') {
+    steps {
+        sh 'phploc app/ --log-csv build/logs/phploc.csv'
+    }
+}
+```
+
+![Unit test](./media/codeanalysis.png)
+
+Plot the data using plot Jenkins plugin
+
+This plugin provides generic plotting (or graphing) capabilities in Jenkins. It will plot one or more single values variations across builds in one or more plots. Plots for a particular job (or project) are configured in the job configuration screen, where each field has additional help information. Each plot can have one or more lines (called data series). After each build completes the plots’ data series latest values are pulled from the CSV file generated by phploc.
+
+
+```
+stage('Plot Code Coverage Report') {
+  stage('Plot Code Coverage Report') {
+      steps {
+
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Lines of Code (LOC),Comment Lines of Code (CLOC),Non-Comment Lines of Code (NCLOC),Logical Lines of Code (LLOC)                          ', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'A - Lines of code', yaxis: 'Lines of Code'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Directories,Files,Namespaces', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'B - Structures Containers', yaxis: 'Count'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Average Class Length (LLOC),Average Method Length (LLOC),Average Function Length (LLOC)', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'C - Average Length', yaxis: 'Average Lines of Code'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Cyclomatic Complexity / Lines of Code,Cyclomatic Complexity / Number of Methods ', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'D - Relative Cyclomatic Complexity', yaxis: 'Cyclomatic Complexity by Structure'      
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Classes,Abstract Classes,Concrete Classes', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'E - Types of Classes', yaxis: 'Count'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Methods,Non-Static Methods,Static Methods,Public Methods,Non-Public Methods', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'F - Types of Methods', yaxis: 'Count'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Constants,Global Constants,Class Constants', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'G - Types of Constants', yaxis: 'Count'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Test Classes,Test Methods', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'I - Testing', yaxis: 'Count'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Logical Lines of Code (LLOC),Classes Length (LLOC),Functions Length (LLOC),LLOC outside functions or classes ', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'AB - Code Structure by Logical Lines of Code', yaxis: 'Logical Lines of Code'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Functions,Named Functions,Anonymous Functions', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'H - Types of Functions', yaxis: 'Count'
+            plot csvFileName: 'plot-396c4a6b-b573-41e5-85d8-73613b2ffffb.csv', csvSeries: [[displayTableFlag: false, exclusionValues: 'Interfaces,Traits,Classes,Methods,Functions,Constants', file: 'build/logs/phploc.csv', inclusionFlag: 'INCLUDE_BY_STRING', url: '']], group: 'phploc', numBuilds: '100', style: 'line', title: 'BB - Structure Objects', yaxis: 'Count'
+    }
+}
+```
+
+![Plot](./media/plotcode.png)
+
+Click on the Plots button on the left pane. If everything was configured properly, you should see something like this:
+
+
+![Plot](./media/plot.png)
+
+
+Package the artifacts
+
+```
+stage ('Package Artifact') {
+  steps {
+          sh 'zip -qr ${WORKSPACE}/php-todo.zip ${WORKSPACE}/*'
+    }
+}
+```
+
+![Package](./media/packageartifact.png)
+
+Publish packaged artifact into Artifactory
+
+```
+stage ('Deploy Artifact') {
+  steps {
+          script { 
+               def server = Artifactory.server 'artifactory-server'
+               def uploadSpec = """{
+                  "files": [{
+                     "pattern": "php-todo.zip",
+                     "target": "php-todo"
+                  }]
+               }"""
+
+               server.upload(uploadSpec) 
+             }
+  }
+}
+```
+
+
+![Deploy artifact](./media/deployartifact.png)
+
+
+TO BE CONTINUED...
+
