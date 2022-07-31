@@ -681,8 +681,11 @@ stage ('Deploy Artifact') {
 ```
 
 
-![Deploy artifact](./media/deployartifact.png)
+![Deploy artifact](./media/deployartifact2.png)
 
+![Artifact](./media/artifact.png)
+
+![Artifact](./media/artifact2.png)
 
 TO BE CONTINUED...
 
